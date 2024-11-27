@@ -220,7 +220,7 @@ def run_task():
             with open('news.txt', 'a') as file:
                 file.write(link + '\n')
             
-            #post_to_reddit(link, name)
+            post_to_reddit(link, name)
             break  # Exit the loop after successfully posting
         else:
             print(f"Skipped due to forbidden keyword or title is None: {name}")
