@@ -26,7 +26,7 @@ reddit_client_secret = os.getenv('REDDIT_CLIENT_SECRET')
 reddit_user_agent = os.getenv('REDDIT_USER_AGENT')
 reddit_subreddit = ('maplestory')
 
-def get_first_news_link(url):
+def get_first_news_link(url, skip_links=[]):
     # Create a new instance of the Chrome driver with headless options
     chrome_options = Options()
     chrome_options.add_argument("--headless")
@@ -49,15 +49,20 @@ def get_first_news_link(url):
         # Use BeautifulSoup to parse the HTML
         soup = BeautifulSoup(page_source, 'html.parser')
 
-        # Find the first anchor tag with href containing "/maplestory/news/"
-        first_news_link = None
-        for a_tag in soup.find_all('a', href=True):
-            if "/maplestory/news/" in a_tag['href']:
-                first_news_link = "https://www.nexon.com" + a_tag['href']
-                break  # Stop after finding the first instance
+        # Find all anchor tags with href containing "/maplestory/news/"
+        news_links = [
+            "https://www.nexon.com" + a_tag['href']
+            for a_tag in soup.find_all('a', href=True)
+            if "/maplestory/news/" in a_tag['href']
+        ]
 
-        # If we found a link, check if it is new
-        if first_news_link:
+        # Filter out any skipped links
+        filtered_links = [link for link in news_links if link not in skip_links]
+
+        # Return the first non-skipped link
+        if filtered_links:
+            first_news_link = filtered_links[0]
+
             # Check if news.txt exists
             if os.path.exists('news.txt'):
                 # Read the existing URL from the file
@@ -89,6 +94,7 @@ def get_first_news_link(url):
 
     finally:
         driver.quit()
+
 
 def parse_url_title(url):
     # Regex pattern to match URLs with the specified format
@@ -196,22 +202,30 @@ def post_to_reddit(url, name):
 
 
 def run_task():
-    print("checking for news")
-    link = get_first_news_link("https://www.nexon.com/maplestory/news/all?page=1")
-    if link:
-        print("getting title for:")
-        print(link)
+    print("Checking for news...")
+    skip_links = []  # Keep track of links we've already skipped
+
+    while True:
+        link = get_first_news_link("https://www.nexon.com/maplestory/news/all?page=1", skip_links=skip_links)
+        
+        if not link:
+            print("No new link found or end of task.")
+            break
+
+        print(f"Getting title for: {link}")
         name = get_title(link)
-        print("title:")
-        print(name)
-        forbidden_keywords = ["[UPDATED", "[COMPLETED", "MAINTENANCE"]
+        print(f"Title: {name}")
+
+        forbidden_keywords = ["[UPDATED", "[COMPLETED", "MAINTENANCE","ART CORNER"]
+
         if name is not None and not any(keyword in name for keyword in forbidden_keywords):
-           post_to_reddit(link, name)
-           #print("test")
+            post_to_reddit(link, name)
+            break  # Exit the loop after successfully posting
         else:
-            print("had forbidden keyword or none")
-    else:
-        print("end task")
+            print(f"Skipped due to forbidden keyword or title is None: {name}")
+            skip_links.append(link)  # Add this link to the skip list
+
+    print("End task")
 
 # Schedule the task at xx:00 and xx:30
 schedule.every().hour.at(":00").do(run_task)  # Run at every xx:00
