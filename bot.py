@@ -1,4 +1,5 @@
 import os
+import re
 from dotenv import load_dotenv
 import logging
 from selenium import webdriver
@@ -23,7 +24,7 @@ reddit_password = os.getenv('REDDIT_PASSWORD')
 reddit_client_id = os.getenv('REDDIT_CLIENT_ID')
 reddit_client_secret = os.getenv('REDDIT_CLIENT_SECRET')
 reddit_user_agent = os.getenv('REDDIT_USER_AGENT')
-reddit_subreddit = ('hxydn')
+reddit_subreddit = ('maplestory')
 
 def get_first_news_link(url):
     # Create a new instance of the Chrome driver with headless options
@@ -89,6 +90,20 @@ def get_first_news_link(url):
     finally:
         driver.quit()
 
+def parse_url_title(url):
+    # Regex pattern to match URLs with the specified format
+    pattern = r"https://www\.nexon\.com/maplestory/news/\w+/\d{5}/([\w-]+)"
+    
+    # Search for the pattern in the URL
+    match = re.search(pattern, url)
+    
+    if match:
+        # Extract the title part and replace dashes with spaces, then capitalize each word
+        title = match.group(1).replace('-', ' ')
+        return title.title()  # Capitalize the first letter of each word
+    
+    return None  # Return None if URL doesn't match the pattern
+
 #get title of webpage
 def get_title(url):
     # Create a new instance of the Chrome driver
@@ -123,7 +138,8 @@ def get_title(url):
 
         # Wait a bit longer to ensure title is fully loaded (optional)
         WebDriverWait(driver, 10).until(lambda d: title_element.text != '')
-
+        if(title is None):
+            title = parse_url_title(url)
         return title
 
     except Exception as e:
@@ -134,8 +150,10 @@ def get_title(url):
         driver.quit()
 
 
-# Function to post to Reddit
-def post_to_reddit(url,name):
+
+
+
+def post_to_reddit(url, name):
     reddit = praw.Reddit(
         client_id=reddit_client_id,
         client_secret=reddit_client_secret,
@@ -143,22 +161,65 @@ def post_to_reddit(url,name):
         username=reddit_username,
         password=reddit_password
     )
-    print("logged in")
+    print("Logged in")
 
     try:
-        title = get_title(url)
+        # Get the title and subreddit
+        title = name
         subreddit = reddit.subreddit(reddit_subreddit)
-        submission = subreddit.submit(
-            title=name, 
-            url=url)
-        print(f"Posted to r/{reddit_subreddit}: {submission.title} - {submission.url}")
+        
+        # Set the "Information" flair
+        flair_text = "Information"
+        flair_choices = subreddit.flair.link_templates
+        flair_template_id = None
+        
+        # Find the "Information" flair
+        for flair in flair_choices:
+            if flair['text'] == flair_text:
+                flair_template_id = flair['id']
+                break
+        
+        # Ensure flair is found
+        if flair_template_id:
+            # Submit the post with the flair applied
+            submission = subreddit.submit(
+                title=title,
+                url=url,
+                flair_id=flair_template_id  # Set flair at the time of submission
+            )
+            print(f"Posted to r/{reddit_subreddit}: {submission.title} - {submission.url}")
+        else:
+            print(f"Flair '{flair_text}' not found.")
+    
     except Exception as e:
         print(f"An error occurred while posting to Reddit: {e}")
 
-if __name__ == "__main__":
+
+def run_task():
+    print("checking for news")
     link = get_first_news_link("https://www.nexon.com/maplestory/news/all?page=1")
     if link:
+        print("getting title for:")
+        print(link)
         name = get_title(link)
-        post_to_reddit(link,name)
+        print("title:")
+        print(name)
+        forbidden_keywords = ["[UPDATED", "[COMPLETED", "MAINTENANCE"]
+        if name is not None and not any(keyword in name for keyword in forbidden_keywords):
+           post_to_reddit(link, name)
+           #print("test")
+        else:
+            print("had forbidden keyword or none")
     else:
         print("end task")
+
+# Schedule the task at xx:00 and xx:30
+schedule.every().hour.at(":00").do(run_task)  # Run at every xx:00
+schedule.every().hour.at(":35").do(run_task)  # Run at every xx:30
+
+if __name__ == "__main__":
+    print("launching and doing initial check")
+    run_task()
+    while True:
+        schedule.run_pending()  # Run pending scheduled tasks
+        time.sleep(1)  # Wait 1 second before checking again
