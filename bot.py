@@ -27,7 +27,13 @@ reddit_user_agent = os.getenv('REDDIT_USER_AGENT')
 reddit_subreddit = ('maplestory')
 
 def get_first_news_link(url, skip_links=[]):
-    # Create a new instance of the Chrome driver with headless options
+    # Load previously posted links from news.txt
+    posted_links = set()
+    if os.path.exists('news.txt'):
+        with open('news.txt', 'r') as file:
+            posted_links = set(line.strip() for line in file.readlines())
+
+    # Create a new instance of the Chrome driver
     chrome_options = Options()
     chrome_options.add_argument("--headless")
     chrome_options.add_argument('--disable-gpu')
@@ -56,37 +62,27 @@ def get_first_news_link(url, skip_links=[]):
             if "/maplestory/news/" in a_tag['href']
         ]
 
-        # Filter out any skipped links
-        filtered_links = [link for link in news_links if link not in skip_links]
+        # Check only the first three links
+        first_three_links = news_links[:3]
+        print(first_three_links)
+        # Filter out links already posted or skipped
+        filtered_links = [
+            link for link in first_three_links
+            if link not in posted_links and link not in skip_links
+        ]
 
-        # Return the first non-skipped link
+        # Return the first non-skipped and non-posted link
         if filtered_links:
             first_news_link = filtered_links[0]
 
-            # Check if news.txt exists
-            if os.path.exists('news.txt'):
-                # Read the existing URL from the file
-                with open('news.txt', 'r') as file:
-                    existing_url = file.read().strip()
+            # Append the link to news.txt
+            with open('news.txt', 'a') as file:
+                file.write(first_news_link + '\n')
 
-                # Compare with the new URL
-                if existing_url == first_news_link:
-                    print("No new post")
-                    return None
-                else:
-                    # If different, update the file and return the new URL
-                    with open('news.txt', 'w') as file:
-                        file.write(first_news_link)
-                    print(f"New post found: {first_news_link}")
-                    return first_news_link
-            else:
-                # If file doesn't exist, create it and save the new URL
-                with open('news.txt', 'w') as file:
-                    file.write(first_news_link)
-                print(f"New post found: {first_news_link}")
-                return first_news_link
+            print(f"New post found: {first_news_link}")
+            return first_news_link
         else:
-            print("No news links found.")
+            print("No new news links found in the first three links.")
             return None
 
     except Exception as e:
@@ -94,6 +90,7 @@ def get_first_news_link(url, skip_links=[]):
 
     finally:
         driver.quit()
+
 
 
 def parse_url_title(url):
@@ -216,10 +213,14 @@ def run_task():
         name = get_title(link)
         print(f"Title: {name}")
 
-        forbidden_keywords = ["[UPDATED", "[COMPLETED", "MAINTENANCE","ART CORNER"]
+        forbidden_keywords = ["[UPDATED", "[COMPLETED", "MAINTENANCE", "ART CORNER"]
 
         if name is not None and not any(keyword in name for keyword in forbidden_keywords):
-            post_to_reddit(link, name)
+            # Save the new URL to news.txt before posting
+            with open('news.txt', 'a') as file:
+                file.write(link + '\n')
+            
+            #post_to_reddit(link, name)
             break  # Exit the loop after successfully posting
         else:
             print(f"Skipped due to forbidden keyword or title is None: {name}")
