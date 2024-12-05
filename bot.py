@@ -213,7 +213,7 @@ def run_task():
         name = get_title(link)
         print(f"Title: {name}")
 
-        forbidden_keywords = ["[UPDATED", "[COMPLETED", "MAINTENANCE", "ART CORNER"]
+        forbidden_keywords = ["[UPDATED", "[COMPLETED", "MAINTENANCE", "ART CORNER","SCHEDULED"]
 
         if name is not None and not any(keyword in name for keyword in forbidden_keywords):
             # Save the new URL to news.txt before posting
