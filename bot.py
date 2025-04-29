@@ -253,7 +253,7 @@ def run_task():
         name = get_title(link)
         print(f"Title: {name}")
 
-        forbidden_keywords = ["[UPDATED", "[COMPLETED", "MAINTENANCE", "ART CORNER","SCHEDULED","PATCH NOTES CHAT CLOSURE"]
+        forbidden_keywords = ["[UPDATED", "[COMPLETED", "MAINTENANCE", "ART CORNER","SCHEDULED","PATCH NOTES CHAT CLOSURE","[UPDATE]"]
 
         if name is not None and not any(keyword in name for keyword in forbidden_keywords):
             # Check if URL is already in recent subreddit posts
