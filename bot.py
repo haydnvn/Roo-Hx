@@ -24,7 +24,7 @@ reddit_password = os.getenv('REDDIT_PASSWORD')
 reddit_client_id = os.getenv('REDDIT_CLIENT_ID')
 reddit_client_secret = os.getenv('REDDIT_CLIENT_SECRET')
 reddit_user_agent = os.getenv('REDDIT_USER_AGENT')
-reddit_subreddit = ('hxydn')
+reddit_subreddit = ('maplestory')
 
 def get_first_news_link(url, skip_links=[]):
     # Load previously posted links from news.txt
@@ -92,6 +92,7 @@ def get_first_news_link(url, skip_links=[]):
         driver.quit()
 
 
+
 def parse_url_title(url):
     # Regex pattern to match URLs with the specified format
     pattern = r"https://www\.nexon\.com/maplestory/news/\w+/\d{5}/([\w-]+)"
@@ -151,49 +152,11 @@ def get_title(url):
         # Close the browser
         driver.quit()
 
-def check_if_url_in_recent_posts(url, limit=10):
-    """
-    Check if the URL has been posted in the recent posts of the subreddit
-    
-    Args:
-        url (str): The URL to check
-        limit (int): Number of recent posts to check (default: 10)
-    
-    Returns:
-        bool: True if URL found in recent posts, False otherwise
-    """
-    try:
-        # Initialize Reddit API connection
-        reddit = praw.Reddit(
-            client_id=reddit_client_id,
-            client_secret=reddit_client_secret,
-            user_agent=reddit_user_agent,
-            username=reddit_username,
-            password=reddit_password
-        )
-        
-        # Access the subreddit
-        subreddit = reddit.subreddit(reddit_subreddit)
-        
-        # Check recent posts
-        for submission in subreddit.new(limit=limit):
-            if submission.url == url:
-                print(f"URL already posted recently: {url}")
-                return True
-                
-        return False
-    
-    except Exception as e:
-        print(f"Error checking recent posts: {e}")
-        # If there's an error, we'll assume it's not a duplicate to be safe
-        return False
+
+
+
 
 def post_to_reddit(url, name):
-    # First check if this URL was recently posted
-    if check_if_url_in_recent_posts(url):
-        print(f"Skipping post as URL was found in recent posts: {url}")
-        return False
-
     reddit = praw.Reddit(
         client_id=reddit_client_id,
         client_secret=reddit_client_secret,
@@ -228,14 +191,11 @@ def post_to_reddit(url, name):
                 flair_id=flair_template_id  # Set flair at the time of submission
             )
             print(f"Posted to r/{reddit_subreddit}: {submission.title} - {submission.url}")
-            return True
         else:
             print(f"Flair '{flair_text}' not found.")
-            return False
     
     except Exception as e:
         print(f"An error occurred while posting to Reddit: {e}")
-        return False
 
 
 def run_task():
@@ -256,30 +216,21 @@ def run_task():
         forbidden_keywords = ["[UPDATED", "[COMPLETED", "MAINTENANCE", "ART CORNER","SCHEDULED","PATCH NOTES CHAT CLOSURE"]
 
         if name is not None and not any(keyword in name for keyword in forbidden_keywords):
-            # Check if URL is already in recent subreddit posts
-            if check_if_url_in_recent_posts(link):
-                print(f"URL {link} already posted recently. Skipping...")
-                skip_links.append(link)
-                continue
-                
             # Save the new URL to news.txt before posting
             with open('news.txt', 'a') as file:
                 file.write(link + '\n')
             
-            post_success = post_to_reddit(link, name)
-            if post_success:
-                break  # Exit the loop after successfully posting
-            else:
-                skip_links.append(link)  # Add this link to skip list if posting failed
+            post_to_reddit(link, name)
+            break  # Exit the loop after successfully posting
         else:
             print(f"Skipped due to forbidden keyword or title is None: {name}")
             skip_links.append(link)  # Add this link to the skip list
 
     print("End task")
 
-# Schedule the task at xx:00 and xx:35
+# Schedule the task at xx:00 and xx:30
 schedule.every().hour.at(":00").do(run_task)  # Run at every xx:00
-schedule.every().hour.at(":35").do(run_task)  # Run at every xx:35
+schedule.every().hour.at(":35").do(run_task)  # Run at every xx:30
 
 if __name__ == "__main__":
     print("launching and doing initial check")
