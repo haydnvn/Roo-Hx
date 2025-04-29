@@ -24,7 +24,7 @@ reddit_password = os.getenv('REDDIT_PASSWORD')
 reddit_client_id = os.getenv('REDDIT_CLIENT_ID')
 reddit_client_secret = os.getenv('REDDIT_CLIENT_SECRET')
 reddit_user_agent = os.getenv('REDDIT_USER_AGENT')
-reddit_subreddit = ('maplestory')
+reddit_subreddit = ('hxydn')
 
 def get_first_news_link(url, skip_links=[]):
     # Load previously posted links from news.txt
