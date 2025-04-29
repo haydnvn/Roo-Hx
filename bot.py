@@ -24,7 +24,7 @@ reddit_password = os.getenv('REDDIT_PASSWORD')
 reddit_client_id = os.getenv('REDDIT_CLIENT_ID')
 reddit_client_secret = os.getenv('REDDIT_CLIENT_SECRET')
 reddit_user_agent = os.getenv('REDDIT_USER_AGENT')
-reddit_subreddit = ('maplestory')
+reddit_subreddit = ('hxydn')
 
 def get_first_news_link(url, skip_links=[]):
     # Load previously posted links from news.txt
@@ -172,27 +172,27 @@ def post_to_reddit(url, name):
         subreddit = reddit.subreddit(reddit_subreddit)
         
         # Set the "Information" flair
-        flair_text = "Information"
-        flair_choices = subreddit.flair.link_templates
-        flair_template_id = None
+        #flair_text = "Information"
+        #flair_choices = subreddit.flair.link_templates
+        #flair_template_id = None
         
         # Find the "Information" flair
-        for flair in flair_choices:
-            if flair['text'] == flair_text:
-                flair_template_id = flair['id']
-                break
+        #for flair in flair_choices:
+        #    if flair['text'] == flair_text:
+        #        flair_template_id = flair['id']
+        #        break
         
         # Ensure flair is found
-        if flair_template_id:
+        if True:#flair_template_id:
             # Submit the post with the flair applied
             submission = subreddit.submit(
                 title=title,
                 url=url,
-                flair_id=flair_template_id  # Set flair at the time of submission
+                #flair_id=flair_template_id  # Set flair at the time of submission
             )
             print(f"Posted to r/{reddit_subreddit}: {submission.title} - {submission.url}")
-        else:
-            print(f"Flair '{flair_text}' not found.")
+        #else:
+            #print(f"Flair '{flair_text}' not found.")
     
     except Exception as e:
         print(f"An error occurred while posting to Reddit: {e}")
