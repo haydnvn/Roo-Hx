@@ -107,98 +107,29 @@ def parse_url_title(url):
     return None  # Return None if URL doesn't match the pattern
 
 def get_title(url):
-    # Create a new instance of the Chrome driver
-    chrome_options = webdriver.ChromeOptions()
-    chrome_options.add_argument("--headless")  # Run in headless mode (without GUI)
-    chrome_options.add_argument('--disable-gpu')  # Disable GPU hardware acceleration
-    chrome_options.add_argument('--no-sandbox')  # Bypass OS security model
-    chrome_options.add_argument('--window-size=1920x1080')  # Set window size
-    chrome_options.add_argument('--ignore-certificate-errors')  # Ignore SSL certificate errors
-    chrome_options.add_argument('--disable-dev-shm-usage')  # Overcome limited resource problems
-    chrome_options.add_argument('--silent')  # Reduce logging
-
-    service = Service('/usr/bin/chromedriver')
-    driver = webdriver.Chrome(service=service, options=chrome_options)
-
+    """
+    Extract title from URL by taking everything after the last '/',
+    removing dashes, and capitalizing each word.
+    
+    Example:
+    https://www.nexon.com/maplestory/news/maintenance/28117/v-260-known-issues
+    -> "V 260 Known Issues"
+    """
     try:
-        # Navigate to the desired webpage
-        driver.get(url)
-
-        # Try multiple selector strategies
-        title = None
+        # Get everything after the last '/'
+        title_part = url.split('/')[-1]
         
-        # Strategy 1: Original selector
-        try:
-            title_element = WebDriverWait(driver, 10).until(
-                EC.visibility_of_element_located((By.CSS_SELECTOR, ".news-detail__title.title.xs"))
-            )
-            title = title_element.text.strip()
-            if title:
-                return title
-        except Exception as e:
-            print(f"Strategy 1 failed: {e}")
-
-        # Strategy 2: Try with just the main class
-        try:
-            title_element = WebDriverWait(driver, 5).until(
-                EC.visibility_of_element_located((By.CSS_SELECTOR, ".news-detail__title"))
-            )
-            title = title_element.text.strip()
-            if title:
-                return title
-        except Exception as e:
-            print(f"Strategy 2 failed: {e}")
-
-        # Strategy 3: Try with h1 tag and class
-        try:
-            title_element = WebDriverWait(driver, 5).until(
-                EC.visibility_of_element_located((By.CSS_SELECTOR, "h1.news-detail__title"))
-            )
-            title = title_element.text.strip()
-            if title:
-                return title
-        except Exception as e:
-            print(f"Strategy 3 failed: {e}")
-
-        # Strategy 4: Use BeautifulSoup as backup
-        try:
-            # Give a bit more time for dynamic content
-            time.sleep(2)
-            
-            page_source = driver.page_source
-            soup = BeautifulSoup(page_source, 'html.parser')
-            
-            # Try to find the title element with different approaches
-            title_element = soup.find('h1', class_='news-detail__title title xs')
-            if not title_element:
-                title_element = soup.find('h1', class_='news-detail__title')
-            if not title_element:
-                title_element = soup.find(class_='news-detail__title')
-            if not title_element:
-                # Try finding by partial class match
-                title_element = soup.find(class_=lambda x: x and 'news-detail__title' in x)
-            
-            if title_element:
-                title = title_element.get_text().strip()
-                if title:
-                    return title
-        except Exception as e:
-            print(f"BeautifulSoup strategy failed: {e}")
-
-        # Fallback to URL parsing if all else fails
-        if not title:
-            title = parse_url_title(url)
-            
+        # Replace dashes with spaces
+        title = title_part.replace('-', ' ')
+        
+        # Capitalize the first letter of each word
+        title = title.title()
+        
         return title
-
+        
     except Exception as e:
         print(f"An error occurred in get_title: {e}")
-        # Fallback to URL parsing
-        return parse_url_title(url)
-
-    finally:
-        # Close the browser
-        driver.quit()
+        return None
 
 def check_if_url_in_recent_posts(url, limit=10):
     """
