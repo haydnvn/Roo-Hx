@@ -106,7 +106,6 @@ def parse_url_title(url):
     
     return None  # Return None if URL doesn't match the pattern
 
-#get title of webpage
 def get_title(url):
     # Create a new instance of the Chrome driver
     chrome_options = webdriver.ChromeOptions()
@@ -125,27 +124,77 @@ def get_title(url):
         # Navigate to the desired webpage
         driver.get(url)
 
-        # Wait for the title to be present (can be customized depending on page load behavior)
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, ".news-detail__title.title.xs"))
-        )
+        # Try multiple selector strategies
+        title = None
+        
+        # Strategy 1: Original selector
+        try:
+            title_element = WebDriverWait(driver, 10).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, ".news-detail__title.title.xs"))
+            )
+            title = title_element.text.strip()
+            if title:
+                return title
+        except Exception as e:
+            print(f"Strategy 1 failed: {e}")
 
-        # Wait for the title text to be non-empty
-        title_element = WebDriverWait(driver, 10).until(
-            EC.visibility_of_element_located((By.CSS_SELECTOR, ".news-detail__title.title.xs"))
-        )
+        # Strategy 2: Try with just the main class
+        try:
+            title_element = WebDriverWait(driver, 5).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, ".news-detail__title"))
+            )
+            title = title_element.text.strip()
+            if title:
+                return title
+        except Exception as e:
+            print(f"Strategy 2 failed: {e}")
 
-        # Get the text from the title element
-        title = title_element.text
+        # Strategy 3: Try with h1 tag and class
+        try:
+            title_element = WebDriverWait(driver, 5).until(
+                EC.visibility_of_element_located((By.CSS_SELECTOR, "h1.news-detail__title"))
+            )
+            title = title_element.text.strip()
+            if title:
+                return title
+        except Exception as e:
+            print(f"Strategy 3 failed: {e}")
 
-        # Wait a bit longer to ensure title is fully loaded (optional)
-        WebDriverWait(driver, 10).until(lambda d: title_element.text != '')
-        if(title is None):
+        # Strategy 4: Use BeautifulSoup as backup
+        try:
+            # Give a bit more time for dynamic content
+            time.sleep(2)
+            
+            page_source = driver.page_source
+            soup = BeautifulSoup(page_source, 'html.parser')
+            
+            # Try to find the title element with different approaches
+            title_element = soup.find('h1', class_='news-detail__title title xs')
+            if not title_element:
+                title_element = soup.find('h1', class_='news-detail__title')
+            if not title_element:
+                title_element = soup.find(class_='news-detail__title')
+            if not title_element:
+                # Try finding by partial class match
+                title_element = soup.find(class_=lambda x: x and 'news-detail__title' in x)
+            
+            if title_element:
+                title = title_element.get_text().strip()
+                if title:
+                    return title
+        except Exception as e:
+            print(f"BeautifulSoup strategy failed: {e}")
+
+        # Fallback to URL parsing if all else fails
+        if not title:
             title = parse_url_title(url)
+            
         return title
 
     except Exception as e:
         print(f"An error occurred in get_title: {e}")
+        # Fallback to URL parsing
+        return parse_url_title(url)
 
     finally:
         # Close the browser
