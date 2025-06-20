@@ -234,8 +234,16 @@ def run_task():
         print(f"Title: {name}")
 
         forbidden_keywords = ["[UPDATED", "[COMPLETED", "MAINTENANCE", "ART CORNER","SCHEDULED","PATCH NOTES CHAT CLOSURE","[UPDATE]"]
+        
+        # Check if title starts with "update" or "updated" (case-insensitive)
+        starts_with_forbidden = False
+        if name is not None:
+            name_lower = name.lower()
+            forbidden_prefixes = ["update", "updated", "complete", "completed"]
+            if any(name_lower.startswith(prefix) for prefix in forbidden_prefixes):
+                starts_with_forbidden = True
 
-        if name is not None and not any(keyword in name for keyword in forbidden_keywords):
+        if name is not None and not any(keyword in name for keyword in forbidden_keywords) and not starts_with_forbidden:
             # Check if URL is already in recent subreddit posts
             if check_if_url_in_recent_posts(link):
                 print(f"URL {link} already posted recently. Skipping...")
@@ -252,7 +260,10 @@ def run_task():
             else:
                 skip_links.append(link)  # Add this link to skip list if posting failed
         else:
-            print(f"Skipped due to forbidden keyword or title is None: {name}")
+            if starts_with_forbidden:
+                print(f"Skipped due to title starting with 'update' or 'updated': {name}")
+            else:
+                print(f"Skipped due to forbidden keyword or title is None: {name}")
             skip_links.append(link)  # Add this link to the skip list
 
     print("End task")
