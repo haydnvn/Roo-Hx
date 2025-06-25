@@ -221,20 +221,17 @@ def post_to_reddit(url, name):
 def run_task():
     print("Checking for news...")
     skip_links = []  # Keep track of links we've already skipped
-
     while True:
         link = get_first_news_link("https://www.nexon.com/maplestory/news/all?page=1", skip_links=skip_links)
-        
+       
         if not link:
             print("No new link found or end of task.")
             break
-
         print(f"Getting title for: {link}")
         name = get_title(link)
         print(f"Title: {name}")
-
         forbidden_keywords = ["[UPDATED", "[COMPLETED", "MAINTENANCE", "ART CORNER","SCHEDULED","PATCH NOTES CHAT CLOSURE","[UPDATE]"]
-        
+       
         # Check if title starts with "update" or "updated" (case-insensitive)
         starts_with_forbidden = False
         if name is not None:
@@ -242,18 +239,26 @@ def run_task():
             forbidden_prefixes = ["update", "updated", "complete", "completed"]
             if any(name_lower.startswith(prefix) for prefix in forbidden_prefixes):
                 starts_with_forbidden = True
-
-        if name is not None and not any(keyword in name for keyword in forbidden_keywords) and not starts_with_forbidden:
+        
+        # Check for forbidden keywords with case-insensitive comparison
+        contains_forbidden_keyword = False
+        if name is not None:
+            name_lower = name.lower()
+            forbidden_keywords_lower = [keyword.lower() for keyword in forbidden_keywords]
+            if any(keyword_lower in name_lower for keyword_lower in forbidden_keywords_lower):
+                contains_forbidden_keyword = True
+        
+        if name is not None and not contains_forbidden_keyword and not starts_with_forbidden:
             # Check if URL is already in recent subreddit posts
             if check_if_url_in_recent_posts(link):
                 print(f"URL {link} already posted recently. Skipping...")
                 skip_links.append(link)
                 continue
-                
+               
             # Save the new URL to news.txt before posting
             with open('news.txt', 'a') as file:
                 file.write(link + '\n')
-            
+           
             post_success = post_to_reddit(link, name)
             if post_success:
                 break  # Exit the loop after successfully posting
@@ -262,10 +267,11 @@ def run_task():
         else:
             if starts_with_forbidden:
                 print(f"Skipped due to title starting with 'update' or 'updated': {name}")
+            elif contains_forbidden_keyword:
+                print(f"Skipped due to forbidden keyword: {name}")
             else:
-                print(f"Skipped due to forbidden keyword or title is None: {name}")
+                print(f"Skipped due to title is None: {name}")
             skip_links.append(link)  # Add this link to the skip list
-
     print("End task")
 
 # Schedule the task at xx:00 and xx:35
