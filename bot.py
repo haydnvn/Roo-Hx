@@ -1,5 +1,13 @@
 import os
 import re
+import tempfile
+
+# Set custom temp directory before other imports that might use it
+temp_dir = os.path.join(os.path.dirname(__file__), 'tmp')
+os.makedirs(temp_dir, exist_ok=True)
+os.environ['TMPDIR'] = temp_dir
+tempfile.tempdir = temp_dir
+
 from dotenv import load_dotenv
 import logging
 from selenium import webdriver
