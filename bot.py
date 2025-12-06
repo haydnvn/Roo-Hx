@@ -126,23 +126,41 @@ def get_title(url):
     """
     Extract title from URL by taking everything after the last '/',
     removing dashes, and capitalizing each word.
-    
+
     Example:
     https://www.nexon.com/maplestory/news/maintenance/28117/v-260-known-issues
     -> "V 260 Known Issues"
+
+    https://www.nexon.com/maplestory/news/update/12345/what-s-your-maple-story
+    -> "Whats Your Maple Story"
     """
     try:
         # Get everything after the last '/'
         title_part = url.split('/')[-1]
-        
-        # Replace dashes with spaces
+
+        # Handle common contractions by replacing specific patterns before splitting
+        # This treats "what-s" as "whats" instead of "what s"
+        contractions = {
+            '-s-': 's ',      # what-s-your -> whats your
+            '-t-': 't ',      # don-t-miss -> dont miss
+            '-re-': 're ',    # you-re-ready -> youre ready
+            '-ll-': 'll ',    # we-ll-see -> well see
+            '-ve-': 've ',    # you-ve-got -> youve got
+            '-d-': 'd ',      # you-d-better -> youd better
+            '-m-': 'm ',      # i-m-here -> im here
+        }
+
+        for pattern, replacement in contractions.items():
+            title_part = title_part.replace(pattern, replacement)
+
+        # Replace remaining dashes with spaces
         title = title_part.replace('-', ' ')
-        
+
         # Capitalize the first letter of each word
         title = title.title()
-        
+
         return title
-        
+
     except Exception as e:
         print(f"An error occurred in get_title: {e}")
         return None
