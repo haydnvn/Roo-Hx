@@ -58,7 +58,7 @@ def get_first_news_link(url, skip_links=[]):
     chrome_options.add_argument('--silent')
     chrome_options.add_argument('--disable-blink-features=AutomationControlled')
 
-    service = Service('/usr/bin/chromedriver')
+    service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=chrome_options)
 
     try:
