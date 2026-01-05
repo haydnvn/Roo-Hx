@@ -11,6 +11,7 @@ tempfile.tempdir = temp_dir
 from dotenv import load_dotenv
 import logging
 from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -55,8 +56,10 @@ def get_first_news_link(url, skip_links=[]):
     chrome_options.add_argument('--log-level=3')
     chrome_options.add_argument('--silent')
     chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+    chrome_options.binary_location = '/usr/bin/chromium'
 
-    driver = webdriver.Chrome(options=chrome_options)
+    service = Service('/usr/bin/chromedriver')
+    driver = webdriver.Chrome(service=service, options=chrome_options)
 
     try:
         # Navigate to the URL
