@@ -1,5 +1,6 @@
 import os
 import re
+import shutil
 import tempfile
 
 # Set custom temp directory before other imports that might use it
@@ -74,8 +75,15 @@ def get_first_news_link(url, skip_links=[]):
             firefox_options.add_argument('--width=1280')
             firefox_options.add_argument('--height=720')
 
-            # geckodriver is in PATH, let Selenium find it automatically
-            driver = webdriver.Firefox(options=firefox_options)
+            # Find geckodriver in PATH
+            geckodriver_path = shutil.which('geckodriver')
+            if geckodriver_path:
+                print(f"Found geckodriver at: {geckodriver_path}")
+                service = FirefoxService(executable_path=geckodriver_path)
+                driver = webdriver.Firefox(service=service, options=firefox_options)
+            else:
+                print("geckodriver not found in PATH, trying default")
+                driver = webdriver.Firefox(options=firefox_options)
             print("Using Firefox driver")
         except Exception as firefox_error:
             print(f"Firefox driver also failed: {firefox_error}")
