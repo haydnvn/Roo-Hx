@@ -11,8 +11,10 @@ tempfile.tempdir = temp_dir
 from dotenv import load_dotenv
 import logging
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service as ChromeService
+from selenium.webdriver.chrome.options import Options as ChromeOptions
+from selenium.webdriver.firefox.service import Service as FirefoxService
+from selenium.webdriver.firefox.options import Options as FirefoxOptions
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -40,26 +42,44 @@ def get_first_news_link(url, skip_links=[]):
         with open('news.txt', 'r') as file:
             posted_links = set(line.strip() for line in file.readlines())
 
-    # Create a new instance of the Chrome driver
-    chrome_options = Options()
-    chrome_options.add_argument("--headless=new")
-    chrome_options.add_argument('--disable-gpu')
-    chrome_options.add_argument('--no-sandbox')
-    chrome_options.add_argument('--disable-dev-shm-usage')
-    chrome_options.add_argument('--disable-software-rasterizer')
-    chrome_options.add_argument('--disable-extensions')
-    chrome_options.add_argument('--disable-setuid-sandbox')
-    chrome_options.add_argument('--single-process')
-    chrome_options.add_argument('--window-size=1280x720')
-    chrome_options.add_argument('--ignore-certificate-errors')
-    chrome_options.add_argument('--disable-logging')
-    chrome_options.add_argument('--log-level=3')
-    chrome_options.add_argument('--silent')
-    chrome_options.add_argument('--disable-blink-features=AutomationControlled')
-    chrome_options.binary_location = '/usr/bin/chromium'
+    # Try Chrome first, fall back to Firefox if it fails
+    driver = None
+    try:
+        chrome_options = ChromeOptions()
+        chrome_options.add_argument("--headless=new")
+        chrome_options.add_argument('--disable-gpu')
+        chrome_options.add_argument('--no-sandbox')
+        chrome_options.add_argument('--disable-dev-shm-usage')
+        chrome_options.add_argument('--disable-software-rasterizer')
+        chrome_options.add_argument('--disable-extensions')
+        chrome_options.add_argument('--disable-setuid-sandbox')
+        chrome_options.add_argument('--single-process')
+        chrome_options.add_argument('--window-size=1280x720')
+        chrome_options.add_argument('--ignore-certificate-errors')
+        chrome_options.add_argument('--disable-logging')
+        chrome_options.add_argument('--log-level=3')
+        chrome_options.add_argument('--silent')
+        chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+        chrome_options.binary_location = '/usr/bin/chromium'
 
-    service = Service('/usr/bin/chromedriver')
-    driver = webdriver.Chrome(service=service, options=chrome_options)
+        service = ChromeService('/usr/bin/chromedriver')
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        print("Using Chrome driver")
+    except Exception as chrome_error:
+        print(f"Chrome driver failed: {chrome_error}")
+        print("Falling back to Firefox driver...")
+        try:
+            firefox_options = FirefoxOptions()
+            firefox_options.add_argument("--headless")
+            firefox_options.add_argument('--width=1280')
+            firefox_options.add_argument('--height=720')
+
+            service = FirefoxService('/usr/bin/geckodriver')
+            driver = webdriver.Firefox(service=service, options=firefox_options)
+            print("Using Firefox driver")
+        except Exception as firefox_error:
+            print(f"Firefox driver also failed: {firefox_error}")
+            return None
 
     try:
         # Navigate to the URL
@@ -105,7 +125,8 @@ def get_first_news_link(url, skip_links=[]):
         print(f"An error occurred: {e}")
 
     finally:
-        driver.quit()
+        if driver:
+            driver.quit()
 
 
 def parse_url_title(url):
