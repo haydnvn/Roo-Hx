@@ -74,8 +74,8 @@ def get_first_news_link(url, skip_links=[]):
             firefox_options.add_argument('--width=1280')
             firefox_options.add_argument('--height=720')
 
-            service = FirefoxService('/usr/bin/geckodriver')
-            driver = webdriver.Firefox(service=service, options=firefox_options)
+            # geckodriver is in PATH, let Selenium find it automatically
+            driver = webdriver.Firefox(options=firefox_options)
             print("Using Firefox driver")
         except Exception as firefox_error:
             print(f"Firefox driver also failed: {firefox_error}")
