@@ -57,6 +57,9 @@ def get_first_news_link(url, skip_links=[]):
     try:
         # Navigate to the URL
         driver.get(url)
+        
+        # Wait for dynamic content to load
+        time.sleep(5)
 
         # Get the page source
         page_source = driver.page_source
