@@ -72,8 +72,9 @@ def get_first_news_link(url, skip_links=[]):
         ]
 
         # Check only the first three links
+        print(f"All found links: {news_links}")
         first_three_links = news_links[:3]
-        print(first_three_links)
+        print(f"Checking these first 3: {first_three_links}")
         # Filter out links already posted or skipped
         filtered_links = [
             link for link in first_three_links
