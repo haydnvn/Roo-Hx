@@ -21,7 +21,6 @@ from selenium.webdriver.remote.remote_connection import LOGGER
 import praw
 import schedule
 import time
-from bs4 import BeautifulSoup
 
 # Load environment variables from .env file
 load_dotenv()
@@ -58,75 +57,34 @@ def get_first_news_link(url, skip_links=[]):
         # Navigate to the URL
         driver.get(url)
 
-        # Wait for dynamic content to load - the news list is rendered
-        # client-side, so wait explicitly for a news link to appear
-        # instead of a fixed sleep (which was too short/unreliable).
-        try:
+        # The news list is a Vue app; cards render as plain <div class="news-summary">
+        # elements with no href/data-id anywhere in the DOM - navigation only
+        # happens via a JS click handler. So we click each card and read the
+        # resulting URL instead of scraping an href.
+        WebDriverWait(driver, 20).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "div.news-summary"))
+        )
+
+        news_links = []
+        for i in range(3):
+            cards = driver.find_elements(By.CSS_SELECTOR, "div.news-summary")
+            if i >= len(cards):
+                break
+
+            card = cards[i]
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", card)
+            driver.execute_script("arguments[0].click();", card)
+
+            try:
+                WebDriverWait(driver, 10).until(EC.url_contains("/maplestory/news/"))
+                news_links.append(driver.current_url)
+            except Exception as e:
+                print(f"Timed out waiting for navigation after clicking card {i}: {e}")
+
+            driver.get(url)
             WebDriverWait(driver, 20).until(
-                EC.presence_of_element_located(
-                    (By.CSS_SELECTOR, "a[href*='/maplestory/news/']")
-                )
+                EC.presence_of_element_located((By.CSS_SELECTOR, "div.news-summary"))
             )
-        except Exception as e:
-            print(f"Timed out waiting for news links to appear: {e}")
-
-        # Get the page source
-        page_source = driver.page_source
-
-        # Debug: dump what we actually got so we can diagnose bot-blocking,
-        # redirects, or a changed page structure when the wait times out.
-        print(f"Current URL after load: {driver.current_url}")
-        print(f"Page title: {driver.title}")
-        with open(os.path.join(os.path.dirname(__file__), 'debug_page.html'), 'w', encoding='utf-8') as debug_file:
-            debug_file.write(page_source)
-        print(f"Page source length: {len(page_source)} chars (saved to debug_page.html)")
-        debug_soup = BeautifulSoup(page_source, 'html.parser')
-        all_hrefs = [a['href'] for a in debug_soup.find_all('a', href=True)]
-        print(f"Total <a> tags found: {len(all_hrefs)}")
-        print("All hrefs found:")
-        for href in all_hrefs:
-            print(f"  {href}")
-
-        # The article cards aren't showing up as <a href> tags at all, so
-        # look for the news URL pattern anywhere in the raw source (e.g.
-        # inside an embedded JSON/hydration blob) to find the new structure.
-        news_id_matches = re.findall(r'"[^"]*news[^"]*"', page_source, re.IGNORECASE)
-        unique_matches = sorted(set(news_id_matches))[:50]
-        print(f"Quoted strings containing 'news' found in raw source ({len(set(news_id_matches))} unique):")
-        for m in unique_matches:
-            print(f"  {m}")
-
-        # Inspect the actual news-summary card elements directly - the
-        # class exists in the page but none produced an <a href> above, so
-        # the "read more" link may lack an href or not be an <a> at all.
-        summary_elements = debug_soup.select("[class*='news-summary']")
-        print(f"Elements with class containing 'news-summary': {len(summary_elements)}")
-        for el in summary_elements[:10]:
-            print(f"  <{el.name} class=\"{el.get('class')}\" href=\"{el.get('href')}\">")
-
-        # Dump the full attributes and outerHTML of the top-level card
-        # (exact class "news-summary", not a nested "news-summary__x") to
-        # look for a data-* attribute (slug/id) we can build a URL from.
-        top_cards = debug_soup.select("div.news-summary")
-        print(f"Top-level 'news-summary' cards found: {len(top_cards)}")
-        for card in top_cards[:2]:
-            print(f"  Attrs: {card.attrs}")
-            print(f"  outerHTML (first 1500 chars): {str(card)[:1500]}")
-
-        readmore_elements = debug_soup.select("[class*='readmore']")
-        print(f"Elements with class containing 'readmore': {len(readmore_elements)}")
-        for el in readmore_elements[:10]:
-            print(f"  {el}")
-
-        # Use BeautifulSoup to parse the HTML
-        soup = BeautifulSoup(page_source, 'html.parser')
-
-        # Find all anchor tags with href containing "/maplestory/news/"
-        news_links = [
-            "https://www.nexon.com" + a_tag['href']
-            for a_tag in soup.find_all('a', href=True)
-            if "/maplestory/news/" in a_tag['href']
-        ]
 
         # Check only the first three links
         print(f"All found links: {news_links}")
