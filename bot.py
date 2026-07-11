@@ -57,9 +57,18 @@ def get_first_news_link(url, skip_links=[]):
     try:
         # Navigate to the URL
         driver.get(url)
-        
-        # Wait for dynamic content to load
-        time.sleep(5)
+
+        # Wait for dynamic content to load - the news list is rendered
+        # client-side, so wait explicitly for a news link to appear
+        # instead of a fixed sleep (which was too short/unreliable).
+        try:
+            WebDriverWait(driver, 20).until(
+                EC.presence_of_element_located(
+                    (By.CSS_SELECTOR, "a[href*='/maplestory/news/']")
+                )
+            )
+        except Exception as e:
+            print(f"Timed out waiting for news links to appear: {e}")
 
         # Get the page source
         page_source = driver.page_source
