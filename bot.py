@@ -65,6 +65,8 @@ def get_first_news_link(url, skip_links=[]):
             EC.presence_of_element_located((By.CSS_SELECTOR, "div.news-summary"))
         )
 
+        article_url_pattern = re.compile(r"https://www\.nexon\.com/maplestory/news/[\w-]+/\d+/[\w-]+")
+
         news_links = []
         for i in range(3):
             cards = driver.find_elements(By.CSS_SELECTOR, "div.news-summary")
@@ -76,7 +78,9 @@ def get_first_news_link(url, skip_links=[]):
             driver.execute_script("arguments[0].click();", card)
 
             try:
-                WebDriverWait(driver, 10).until(EC.url_contains("/maplestory/news/"))
+                WebDriverWait(driver, 10).until(
+                    lambda d: d.current_url != url and article_url_pattern.match(d.current_url)
+                )
                 news_links.append(driver.current_url)
             except Exception as e:
                 print(f"Timed out waiting for navigation after clicking card {i}: {e}")
@@ -266,10 +270,18 @@ def run_task():
     skip_links = []  # Keep track of links we've already skipped
     while True:
         link = get_first_news_link("https://www.nexon.com/maplestory/news/all?page=1", skip_links=skip_links)
-       
+
         if not link:
             print("No new link found or end of task.")
             break
+
+        # Safety net: never post anything that isn't a real article URL
+        # (e.g. the news listing page itself, if scraping ever misfires).
+        if not re.match(r"https://www\.nexon\.com/maplestory/news/[\w-]+/\d+/[\w-]+", link):
+            print(f"Skipping malformed/non-article link: {link}")
+            skip_links.append(link)
+            continue
+
         print(f"Getting title for: {link}")
         name = get_title(link)
         print(f"Title: {name}")
