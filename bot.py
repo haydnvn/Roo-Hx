@@ -104,6 +104,15 @@ def get_first_news_link(url, skip_links=[]):
         for el in summary_elements[:10]:
             print(f"  <{el.name} class=\"{el.get('class')}\" href=\"{el.get('href')}\">")
 
+        # Dump the full attributes and outerHTML of the top-level card
+        # (exact class "news-summary", not a nested "news-summary__x") to
+        # look for a data-* attribute (slug/id) we can build a URL from.
+        top_cards = debug_soup.select("div.news-summary")
+        print(f"Top-level 'news-summary' cards found: {len(top_cards)}")
+        for card in top_cards[:2]:
+            print(f"  Attrs: {card.attrs}")
+            print(f"  outerHTML (first 1500 chars): {str(card)[:1500]}")
+
         readmore_elements = debug_soup.select("[class*='readmore']")
         print(f"Elements with class containing 'readmore': {len(readmore_elements)}")
         for el in readmore_elements[:10]:
