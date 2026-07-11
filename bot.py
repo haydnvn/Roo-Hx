@@ -73,6 +73,15 @@ def get_first_news_link(url, skip_links=[]):
         # Get the page source
         page_source = driver.page_source
 
+        # Debug: dump what we actually got so we can diagnose bot-blocking,
+        # redirects, or a changed page structure when the wait times out.
+        print(f"Current URL after load: {driver.current_url}")
+        print(f"Page title: {driver.title}")
+        with open(os.path.join(os.path.dirname(__file__), 'debug_page.html'), 'w', encoding='utf-8') as debug_file:
+            debug_file.write(page_source)
+        print(f"Page source length: {len(page_source)} chars (saved to debug_page.html)")
+        print(f"Total <a> tags found: {len(BeautifulSoup(page_source, 'html.parser').find_all('a'))}")
+
         # Use BeautifulSoup to parse the HTML
         soup = BeautifulSoup(page_source, 'html.parser')
 
