@@ -87,6 +87,15 @@ def get_first_news_link(url, skip_links=[]):
         for href in all_hrefs:
             print(f"  {href}")
 
+        # The article cards aren't showing up as <a href> tags at all, so
+        # look for the news URL pattern anywhere in the raw source (e.g.
+        # inside an embedded JSON/hydration blob) to find the new structure.
+        news_id_matches = re.findall(r'"[^"]*news[^"]*"', page_source, re.IGNORECASE)
+        unique_matches = sorted(set(news_id_matches))[:50]
+        print(f"Quoted strings containing 'news' found in raw source ({len(set(news_id_matches))} unique):")
+        for m in unique_matches:
+            print(f"  {m}")
+
         # Use BeautifulSoup to parse the HTML
         soup = BeautifulSoup(page_source, 'html.parser')
 
