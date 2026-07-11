@@ -1,6 +1,7 @@
 import os
 import re
 import shutil
+from urllib.parse import urlsplit, urlunsplit
 import tempfile
 
 # Set custom temp directory before other imports that might use it
@@ -32,6 +33,11 @@ reddit_client_id = os.getenv('REDDIT_CLIENT_ID')
 reddit_client_secret = os.getenv('REDDIT_CLIENT_SECRET')
 reddit_user_agent = os.getenv('REDDIT_USER_AGENT')
 reddit_subreddit = ('maplestory')
+
+def normalize_url(url):
+    """Strip query string and fragment so tracking params don't defeat dedup."""
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, '', ''))
 
 def get_first_news_link(url, skip_links=[]):
     # Load previously posted links from news.txt
@@ -81,7 +87,7 @@ def get_first_news_link(url, skip_links=[]):
                 WebDriverWait(driver, 10).until(
                     lambda d: d.current_url != url and article_url_pattern.match(d.current_url)
                 )
-                news_links.append(driver.current_url)
+                news_links.append(normalize_url(driver.current_url))
             except Exception as e:
                 print(f"Timed out waiting for navigation after clicking card {i}: {e}")
 
@@ -100,14 +106,12 @@ def get_first_news_link(url, skip_links=[]):
             if link not in posted_links and link not in skip_links
         ]
 
-        # Return the first non-skipped and non-posted link
+        # Return the first non-skipped and non-posted link. Note: this does
+        # NOT write to news.txt - that only happens once the link is
+        # actually confirmed posted to Reddit (see run_task), so a link
+        # that's found but later rejected/fails isn't falsely marked done.
         if filtered_links:
             first_news_link = filtered_links[0]
-
-            # Append the link to news.txt
-            with open('news.txt', 'a') as file:
-                file.write(first_news_link + '\n')
-
             print(f"New post found: {first_news_link}")
             return first_news_link
         else:
@@ -203,8 +207,9 @@ def check_if_url_in_recent_posts(url, limit=10):
         subreddit = reddit.subreddit(reddit_subreddit)
         
         # Check recent posts
+        normalized_url = normalize_url(url)
         for submission in subreddit.new(limit=limit):
-            if submission.url == url:
+            if normalize_url(submission.url) == normalized_url:
                 print(f"URL already posted recently: {url}")
                 return True
                 
@@ -310,12 +315,11 @@ def run_task():
                 skip_links.append(link)
                 continue
                
-            # Save the new URL to news.txt before posting
-            with open('news.txt', 'a') as file:
-                file.write(link + '\n')
-           
             post_success = post_to_reddit(link, name)
             if post_success:
+                # Only record as posted once it's actually confirmed posted
+                with open('news.txt', 'a') as file:
+                    file.write(link + '\n')
                 break  # Exit the loop after successfully posting
             else:
                 skip_links.append(link)  # Add this link to skip list if posting failed
