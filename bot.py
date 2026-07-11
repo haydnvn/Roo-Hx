@@ -80,7 +80,12 @@ def get_first_news_link(url, skip_links=[]):
         with open(os.path.join(os.path.dirname(__file__), 'debug_page.html'), 'w', encoding='utf-8') as debug_file:
             debug_file.write(page_source)
         print(f"Page source length: {len(page_source)} chars (saved to debug_page.html)")
-        print(f"Total <a> tags found: {len(BeautifulSoup(page_source, 'html.parser').find_all('a'))}")
+        debug_soup = BeautifulSoup(page_source, 'html.parser')
+        all_hrefs = [a['href'] for a in debug_soup.find_all('a', href=True)]
+        print(f"Total <a> tags found: {len(all_hrefs)}")
+        print("All hrefs found:")
+        for href in all_hrefs:
+            print(f"  {href}")
 
         # Use BeautifulSoup to parse the HTML
         soup = BeautifulSoup(page_source, 'html.parser')
