@@ -96,6 +96,19 @@ def get_first_news_link(url, skip_links=[]):
         for m in unique_matches:
             print(f"  {m}")
 
+        # Inspect the actual news-summary card elements directly - the
+        # class exists in the page but none produced an <a href> above, so
+        # the "read more" link may lack an href or not be an <a> at all.
+        summary_elements = debug_soup.select("[class*='news-summary']")
+        print(f"Elements with class containing 'news-summary': {len(summary_elements)}")
+        for el in summary_elements[:10]:
+            print(f"  <{el.name} class=\"{el.get('class')}\" href=\"{el.get('href')}\">")
+
+        readmore_elements = debug_soup.select("[class*='readmore']")
+        print(f"Elements with class containing 'readmore': {len(readmore_elements)}")
+        for el in readmore_elements[:10]:
+            print(f"  {el}")
+
         # Use BeautifulSoup to parse the HTML
         soup = BeautifulSoup(page_source, 'html.parser')
 
