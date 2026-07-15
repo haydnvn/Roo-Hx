@@ -220,10 +220,53 @@ def check_if_url_in_recent_posts(url, limit=10):
         # If there's an error, we'll assume it's not a duplicate to be safe
         return False
 
+def check_if_already_posted_by_me(url, limit=50):
+    """
+    Check the bot account's own submission history for this URL.
+
+    Unlike check_if_url_in_recent_posts (which only looks at the last N
+    posts to the subreddit from anyone), this checks the account's own
+    posts directly, so it isn't affected by other users posting in
+    between and catches duplicates even if news.txt was lost/reset.
+
+    Args:
+        url (str): The URL to check
+        limit (int): Number of recent submissions by this account to check (default: 50)
+
+    Returns:
+        bool: True if this account already posted the URL, False otherwise
+    """
+    try:
+        reddit = praw.Reddit(
+            client_id=reddit_client_id,
+            client_secret=reddit_client_secret,
+            user_agent=reddit_user_agent,
+            username=reddit_username,
+            password=reddit_password
+        )
+
+        normalized_url = normalize_url(url)
+        for submission in reddit.user.me().submissions.new(limit=limit):
+            if normalize_url(submission.url) == normalized_url:
+                print(f"URL already posted by this account: {url}")
+                return True
+
+        return False
+
+    except Exception as e:
+        print(f"Error checking own submission history: {e}")
+        # If there's an error, we'll assume it's not a duplicate to be safe
+        return False
+
 def post_to_reddit(url, name):
-    # First check if this URL was recently posted
+    # First check if this URL was recently posted (by anyone in the subreddit,
+    # or by this account specifically)
     if check_if_url_in_recent_posts(url):
         print(f"Skipping post as URL was found in recent posts: {url}")
+        return False
+
+    if check_if_already_posted_by_me(url):
+        print(f"Skipping post as URL was already posted by this account: {url}")
         return False
 
     reddit = praw.Reddit(
