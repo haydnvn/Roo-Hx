@@ -1,8 +1,17 @@
 import os
 import re
 import shutil
+import sys
+from contextlib import contextmanager
 from urllib.parse import urlsplit, urlunsplit
 import tempfile
+
+# POSIX-only. The bot runs on Linux (Raspberry Pi); this import is guarded so
+# the module still loads on Windows for editing, with locking disabled.
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
 
 # Set custom temp directory before other imports that might use it
 temp_dir = os.path.join(os.path.dirname(__file__), 'tmp')
@@ -34,17 +43,128 @@ reddit_client_secret = os.getenv('REDDIT_CLIENT_SECRET')
 reddit_user_agent = os.getenv('REDDIT_USER_AGENT')
 reddit_subreddit = ('maplestory')
 
+# Anchor all state to the script's own directory. These were previously bare
+# relative paths, so the dedup memory silently depended on the working
+# directory the bot happened to be launched from - a launch from anywhere
+# else started with a blank memory and re-posted everything on the front page.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+NEWS_FILE = os.path.join(BASE_DIR, 'news.txt')
+INSTANCE_LOCK_FILE = os.path.join(BASE_DIR, '.bot.instance.lock')
+POST_LOCK_FILE = os.path.join(BASE_DIR, '.bot.post.lock')
+
+
 def normalize_url(url):
-    """Strip query string and fragment so tracking params don't defeat dedup."""
+    """Strip query string and fragment so tracking params don't defeat dedup.
+
+    Also drops a trailing slash and lowercases the host, so the same article
+    can't slip through dedup under two spellings.
+    """
     parts = urlsplit(url)
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, '', ''))
+    path = parts.path.rstrip('/')
+    return urlunsplit((parts.scheme, parts.netloc.lower(), path, '', ''))
+
+
+def load_posted_links():
+    """Return the set of already-posted links, normalized.
+
+    Normalizing on read matters as much as on write: entries recorded before
+    normalize_url existed carry query strings, and would otherwise never match
+    a freshly normalized link - re-posting that article.
+    """
+    if not os.path.exists(NEWS_FILE):
+        return set()
+    with open(NEWS_FILE, 'r') as file:
+        return {normalize_url(line.strip()) for line in file if line.strip()}
+
+
+def record_posted_link(link):
+    """Append a link to the posted-links file and flush it to disk.
+
+    fsync is deliberate: on a Pi that can lose power, a link buffered in the
+    page cache but never written is a link that gets posted a second time
+    after reboot.
+    """
+    with open(NEWS_FILE, 'a') as file:
+        file.write(normalize_url(link) + '\n')
+        file.flush()
+        os.fsync(file.fileno())
+
+
+@contextmanager
+def file_lock(path, description):
+    """Hold an exclusive advisory lock on `path` for the duration of the block.
+
+    Serializes the post critical section across processes, so two bots can
+    never interleave "check news.txt" and "submit to Reddit".
+    """
+    if fcntl is None:
+        yield True
+        return
+    handle = open(path, 'w')
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        yield True
+    finally:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
+def acquire_single_instance_lock():
+    """Exit if another copy of the bot is already running.
+
+    This is the primary duplicate-post defence and it lives here, in the bot
+    itself, rather than in the launcher - so it holds no matter how the bot
+    was started: tmux, cron, systemd, or by hand during a deploy. The lock is
+    released automatically by the OS when the process dies, including on
+    SIGKILL, so a crashed bot never leaves the lock stuck.
+    """
+    if fcntl is None:
+        print("WARNING: file locking unavailable on this platform; "
+              "single-instance protection is DISABLED")
+        return None
+    handle = open(INSTANCE_LOCK_FILE, 'w')
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("Another instance of the bot is already running. Exiting to "
+              "avoid duplicate posts.")
+        handle.close()
+        sys.exit(0)
+    handle.write(str(os.getpid()))
+    handle.flush()
+    # Deliberately leaked: the lock must be held for the process's lifetime.
+    return handle
+
+def get_reddit():
+    """Return a Reddit client, reusing one connection for the whole process.
+
+    Previously every dedup check and every post built a fresh praw.Reddit and
+    re-authenticated. That tripled the API traffic per candidate and made
+    rate-limit errors likelier - which used to mean the dedup checks failed
+    and the bot posted anyway.
+    """
+    if get_reddit._client is None:
+        get_reddit._client = praw.Reddit(
+            client_id=reddit_client_id,
+            client_secret=reddit_client_secret,
+            user_agent=reddit_user_agent,
+            username=reddit_username,
+            password=reddit_password
+        )
+    return get_reddit._client
+
+
+get_reddit._client = None
+
 
 def get_first_news_link(url, skip_links=[]):
-    # Load previously posted links from news.txt
-    posted_links = set()
-    if os.path.exists('news.txt'):
-        with open('news.txt', 'r') as file:
-            posted_links = set(line.strip() for line in file.readlines())
+    # Note: this is only a first-pass filter to pick a candidate. It is NOT
+    # the authority on whether something has been posted - news.txt is re-read
+    # under lock immediately before submitting (see run_task), because the
+    # scrape below takes 1-2 minutes and another process may post during it.
+    posted_links = load_posted_links()
 
     # Create Firefox driver
     firefox_options = FirefoxOptions()
@@ -191,36 +311,30 @@ def check_if_url_in_recent_posts(url, limit=10):
         limit (int): Number of recent posts to check (default: 10)
     
     Returns:
-        bool: True if URL found in recent posts, False otherwise
+        bool: True if URL found in recent posts (or if the check failed),
+              False only when the check ran and found nothing.
     """
     try:
-        # Initialize Reddit API connection
-        reddit = praw.Reddit(
-            client_id=reddit_client_id,
-            client_secret=reddit_client_secret,
-            user_agent=reddit_user_agent,
-            username=reddit_username,
-            password=reddit_password
-        )
-        
-        # Access the subreddit
-        subreddit = reddit.subreddit(reddit_subreddit)
-        
+        subreddit = get_reddit().subreddit(reddit_subreddit)
+
         # Check recent posts
         normalized_url = normalize_url(url)
         for submission in subreddit.new(limit=limit):
             if normalize_url(submission.url) == normalized_url:
                 print(f"URL already posted recently: {url}")
                 return True
-                
-        return False
-    
-    except Exception as e:
-        print(f"Error checking recent posts: {e}")
-        # If there's an error, we'll assume it's not a duplicate to be safe
+
         return False
 
-def check_if_already_posted_by_me(url, limit=50):
+    except Exception as e:
+        print(f"Error checking recent posts: {e}")
+        # Fail CLOSED. This previously returned False ("not a duplicate") on
+        # any error, so a rate-limit or network blip disabled the check and
+        # the bot posted regardless. Skipping a cycle costs one article for
+        # 35 minutes; a duplicate is permanent and public.
+        return True
+
+def check_if_already_posted_by_me(url, limit=200):
     """
     Check the bot account's own submission history for this URL.
 
@@ -231,22 +345,16 @@ def check_if_already_posted_by_me(url, limit=50):
 
     Args:
         url (str): The URL to check
-        limit (int): Number of recent submissions by this account to check (default: 50)
+        limit (int): Number of recent submissions by this account to check
+                     (default: 200, several weeks of posting at 2 checks/hour)
 
     Returns:
-        bool: True if this account already posted the URL, False otherwise
+        bool: True if this account already posted the URL (or if the check
+              failed), False only when the check ran and found nothing.
     """
     try:
-        reddit = praw.Reddit(
-            client_id=reddit_client_id,
-            client_secret=reddit_client_secret,
-            user_agent=reddit_user_agent,
-            username=reddit_username,
-            password=reddit_password
-        )
-
         normalized_url = normalize_url(url)
-        for submission in reddit.user.me().submissions.new(limit=limit):
+        for submission in get_reddit().user.me().submissions.new(limit=limit):
             if normalize_url(submission.url) == normalized_url:
                 print(f"URL already posted by this account: {url}")
                 return True
@@ -255,28 +363,14 @@ def check_if_already_posted_by_me(url, limit=50):
 
     except Exception as e:
         print(f"Error checking own submission history: {e}")
-        # If there's an error, we'll assume it's not a duplicate to be safe
-        return False
+        # Fail CLOSED - see the note in check_if_url_in_recent_posts.
+        return True
 
 def post_to_reddit(url, name):
-    # First check if this URL was recently posted (by anyone in the subreddit,
-    # or by this account specifically)
-    if check_if_url_in_recent_posts(url):
-        print(f"Skipping post as URL was found in recent posts: {url}")
-        return False
-
-    if check_if_already_posted_by_me(url):
-        print(f"Skipping post as URL was already posted by this account: {url}")
-        return False
-
-    reddit = praw.Reddit(
-        client_id=reddit_client_id,
-        client_secret=reddit_client_secret,
-        user_agent=reddit_user_agent,
-        username=reddit_username,
-        password=reddit_password
-    )
-    print("Logged in")
+    # Duplicate checks deliberately do NOT live here. They run in run_task,
+    # inside the same lock that claims the link in news.txt, so nothing can
+    # happen between "confirmed not a duplicate" and "submitted".
+    reddit = get_reddit()
 
     try:
         # Get the title and subreddit
@@ -352,19 +446,42 @@ def run_task():
                 contains_forbidden_keyword = True
         
         if name is not None and not contains_forbidden_keyword and not starts_with_forbidden:
-            # Check if URL is already in recent subreddit posts
-            if check_if_url_in_recent_posts(link):
-                print(f"URL {link} already posted recently. Skipping...")
-                skip_links.append(link)
-                continue
-               
-            post_success = post_to_reddit(link, name)
+            # Everything from here to the submit runs under one lock, with no
+            # slow work inside it. The scrape above takes 1-2 minutes, so the
+            # posted_links snapshot it used is stale by now and must not be
+            # trusted; we re-read under the lock instead.
+            with file_lock(POST_LOCK_FILE, "post"):
+                if normalize_url(link) in load_posted_links():
+                    print(f"URL {link} was posted while we were scraping. Skipping...")
+                    skip_links.append(link)
+                    continue
+
+                if check_if_already_posted_by_me(link):
+                    print(f"URL {link} already in this account's history. Skipping...")
+                    record_posted_link(link)
+                    skip_links.append(link)
+                    continue
+
+                if check_if_url_in_recent_posts(link):
+                    print(f"URL {link} already posted recently. Skipping...")
+                    skip_links.append(link)
+                    continue
+
+                # Claim the link BEFORE submitting, not after. If the bot dies
+                # between submit and record - power cut, SIGKILL, crash - a
+                # record-after design re-posts the article on restart. The
+                # trade is deliberate: a failed submit costs one missed
+                # article (recoverable by deleting the line from news.txt),
+                # whereas a duplicate is public and permanent.
+                record_posted_link(link)
+                post_success = post_to_reddit(link, name)
+
             if post_success:
-                # Only record as posted once it's actually confirmed posted
-                with open('news.txt', 'a') as file:
-                    file.write(link + '\n')
                 break  # Exit the loop after successfully posting
             else:
+                print(f"WARNING: {link} was claimed in {NEWS_FILE} but posting "
+                      f"failed. It will not be retried. Remove that line "
+                      f"manually if you want the bot to try again.")
                 skip_links.append(link)  # Add this link to skip list if posting failed
         else:
             if starts_with_forbidden:
@@ -381,6 +498,10 @@ schedule.every().hour.at(":00").do(run_task)  # Run at every xx:00
 schedule.every().hour.at(":35").do(run_task)  # Run at every xx:35
 
 if __name__ == "__main__":
+    # Must come first: refuses to start if another bot is already running,
+    # regardless of how this one was launched. Held for the process lifetime.
+    _instance_lock = acquire_single_instance_lock()
+
     print("launching and doing initial check")
     run_task()
     while True:
