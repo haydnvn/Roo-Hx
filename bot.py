@@ -42,6 +42,10 @@ reddit_client_id = os.getenv('REDDIT_CLIENT_ID')
 reddit_client_secret = os.getenv('REDDIT_CLIENT_SECRET')
 reddit_user_agent = os.getenv('REDDIT_USER_AGENT')
 reddit_subreddit = ('maplestory')
+# MapleStory Classic news (cards tagged with a "category-chip classic" chip)
+# goes to its own subreddit. If unset, classic posts are skipped entirely
+# rather than falling through to the main subreddit.
+reddit_classic_subreddit = os.getenv('REDDIT_CLASSIC_SUBREDDIT')
 
 # Anchor all state to the script's own directory. These were previously bare
 # relative paths, so the dedup memory silently depended on the working
@@ -194,12 +198,16 @@ def get_first_news_link(url, skip_links=[]):
         article_url_pattern = re.compile(r"https://www\.nexon\.com/maplestory/news/[\w-]+/\d+/[\w-]+")
 
         news_links = []
+        classic_links = set()
         for i in range(3):
             cards = driver.find_elements(By.CSS_SELECTOR, "div.news-summary")
             if i >= len(cards):
                 break
 
             card = cards[i]
+            # Read the category chip before clicking - the card element goes
+            # stale once we navigate away.
+            is_classic = bool(card.find_elements(By.CSS_SELECTOR, ".category-chip.classic"))
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", card)
             driver.execute_script("arguments[0].click();", card)
 
@@ -207,7 +215,10 @@ def get_first_news_link(url, skip_links=[]):
                 WebDriverWait(driver, 10).until(
                     lambda d: d.current_url != url and article_url_pattern.match(d.current_url)
                 )
-                news_links.append(normalize_url(driver.current_url))
+                news_link = normalize_url(driver.current_url)
+                news_links.append(news_link)
+                if is_classic:
+                    classic_links.add(news_link)
             except Exception as e:
                 print(f"Timed out waiting for navigation after clicking card {i}: {e}")
 
@@ -218,6 +229,7 @@ def get_first_news_link(url, skip_links=[]):
 
         # Check only the first three links
         print(f"All found links: {news_links}")
+        print(f"Classic links: {sorted(classic_links)}")
         first_three_links = news_links[:3]
         print(f"Checking these first 3: {first_three_links}")
         # Filter out links already posted or skipped
@@ -232,8 +244,9 @@ def get_first_news_link(url, skip_links=[]):
         # that's found but later rejected/fails isn't falsely marked done.
         if filtered_links:
             first_news_link = filtered_links[0]
-            print(f"New post found: {first_news_link}")
-            return first_news_link
+            is_classic = first_news_link in classic_links
+            print(f"New post found: {first_news_link} (classic: {is_classic})")
+            return first_news_link, is_classic
         else:
             print("No new news links found in the first three links.")
             return None
@@ -302,12 +315,13 @@ def get_title(url):
         print(f"An error occurred in get_title: {e}")
         return None
 
-def check_if_url_in_recent_posts(url, limit=10):
+def check_if_url_in_recent_posts(url, subreddit_name, limit=10):
     """
     Check if the URL has been posted in the recent posts of the subreddit
     
     Args:
         url (str): The URL to check
+        subreddit_name (str): The subreddit the URL would be posted to
         limit (int): Number of recent posts to check (default: 10)
     
     Returns:
@@ -315,7 +329,7 @@ def check_if_url_in_recent_posts(url, limit=10):
               False only when the check ran and found nothing.
     """
     try:
-        subreddit = get_reddit().subreddit(reddit_subreddit)
+        subreddit = get_reddit().subreddit(subreddit_name)
 
         # Check recent posts
         normalized_url = normalize_url(url)
@@ -366,7 +380,7 @@ def check_if_already_posted_by_me(url, limit=200):
         # Fail CLOSED - see the note in check_if_url_in_recent_posts.
         return True
 
-def post_to_reddit(url, name):
+def post_to_reddit(url, name, subreddit_name):
     # Duplicate checks deliberately do NOT live here. They run in run_task,
     # inside the same lock that claims the link in news.txt, so nothing can
     # happen between "confirmed not a duplicate" and "submitted".
@@ -375,7 +389,7 @@ def post_to_reddit(url, name):
     try:
         # Get the title and subreddit
         title = name
-        subreddit = reddit.subreddit(reddit_subreddit)
+        subreddit = reddit.subreddit(subreddit_name)
         
         # Set the "Information" flair
         flair_text = "Information"
@@ -388,19 +402,20 @@ def post_to_reddit(url, name):
                 flair_template_id = flair['id']
                 break
         
-        # Ensure flair is found
-        if flair_template_id:
-            # Submit the post with the flair applied
-            submission = subreddit.submit(
-                title=title,
-                url=url,
-                flair_id=flair_template_id  # Set flair at the time of submission
-            )
-            print(f"Posted to r/{reddit_subreddit}: {submission.title} - {submission.url}")
-            return True
-        else:
-            print(f"Flair '{flair_text}' not found.")
-            return False
+        # The link is already claimed in news.txt by the time we get here, so
+        # a missing flair must not abort the post - that would silently lose
+        # the article. Submit without flair instead; a subreddit that requires
+        # flair will reject the submit and we report failure as before.
+        if not flair_template_id:
+            print(f"Flair '{flair_text}' not found in r/{subreddit_name}; posting without flair.")
+
+        submission = subreddit.submit(
+            title=title,
+            url=url,
+            flair_id=flair_template_id  # Set flair at the time of submission
+        )
+        print(f"Posted to r/{subreddit_name}: {submission.title} - {submission.url}")
+        return True
     
     except Exception as e:
         print(f"An error occurred while posting to Reddit: {e}")
@@ -411,11 +426,22 @@ def run_task():
     print("Checking for news...")
     skip_links = []  # Keep track of links we've already skipped
     while True:
-        link = get_first_news_link("https://www.nexon.com/maplestory/news/all?page=1", skip_links=skip_links)
+        result = get_first_news_link("https://www.nexon.com/maplestory/news/all?page=1", skip_links=skip_links)
 
-        if not link:
+        if not result:
             print("No new link found or end of task.")
             break
+
+        link, is_classic = result
+
+        if is_classic:
+            if not reddit_classic_subreddit:
+                print(f"Skipping classic post (REDDIT_CLASSIC_SUBREDDIT not set): {link}")
+                skip_links.append(link)
+                continue
+            target_subreddit = reddit_classic_subreddit
+        else:
+            target_subreddit = reddit_subreddit
 
         # Safety net: never post anything that isn't a real article URL
         # (e.g. the news listing page itself, if scraping ever misfires).
@@ -462,7 +488,7 @@ def run_task():
                     skip_links.append(link)
                     continue
 
-                if check_if_url_in_recent_posts(link):
+                if check_if_url_in_recent_posts(link, target_subreddit):
                     print(f"URL {link} already posted recently. Skipping...")
                     skip_links.append(link)
                     continue
@@ -474,7 +500,7 @@ def run_task():
                 # article (recoverable by deleting the line from news.txt),
                 # whereas a duplicate is public and permanent.
                 record_posted_link(link)
-                post_success = post_to_reddit(link, name)
+                post_success = post_to_reddit(link, name, target_subreddit)
 
             if post_success:
                 break  # Exit the loop after successfully posting

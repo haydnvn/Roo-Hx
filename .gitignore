@@ -39,6 +39,14 @@ venv.bak/
 
 # Bot specific files
 news.txt
+bot.pid
+
+# Single-instance / post-critical-section locks (see acquire_single_instance_lock)
+.bot.instance.lock
+.bot.post.lock
+
+# Selenium temp dir created at import time
+tmp/
 
 # Logs
 *.log

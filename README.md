@@ -44,6 +44,7 @@ REDDIT_PASSWORD=your_reddit_password
 REDDIT_CLIENT_ID=your_client_id
 REDDIT_CLIENT_SECRET=your_client_secret
 REDDIT_USER_AGENT=MapleStoryNewsBot/1.0
+REDDIT_CLASSIC_SUBREDDIT=your_classic_subreddit  # MapleStory Classic news goes here; unset = skip classic posts
 ```
 
 ## Reddit API Setup
