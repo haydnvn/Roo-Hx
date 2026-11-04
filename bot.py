@@ -31,9 +31,11 @@ from selenium.webdriver.remote.remote_connection import LOGGER
 import praw
 import schedule
 import time
+import botstatus
 
 # Load environment variables from .env file
 load_dotenv()
+status = botstatus.init("reddit-news-bot")
 
 # Reddit credentials from environment variables
 reddit_username = os.getenv('REDDIT_USERNAME')
@@ -55,6 +57,21 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 NEWS_FILE = os.path.join(BASE_DIR, 'news.txt')
 INSTANCE_LOCK_FILE = os.path.join(BASE_DIR, '.bot.instance.lock')
 POST_LOCK_FILE = os.path.join(BASE_DIR, '.bot.post.lock')
+
+# Flair applied per target subreddit. Matched loosely (case/brackets ignored),
+# so a flair shown as "[Notice]" on Reddit still matches "Notice".
+MAIN_FLAIR = "Information"
+CLASSIC_FLAIR = "Notice"
+
+
+def log(tag, message):
+    """One-line, timestamped, fixed-width-tag log so a run reads at a glance.
+
+    Tags: RUN (cycle start/end), SCAN (what was found), SKIP, POST, OK,
+    WARN, ERR. Flushed so output shows up live under tmux/systemd/redirects.
+    """
+    print(f"{time.strftime('%H:%M:%S')}  {tag:<5} {message}", flush=True)
+    status.event(tag, message)
 
 
 def normalize_url(url):
@@ -125,15 +142,15 @@ def acquire_single_instance_lock():
     SIGKILL, so a crashed bot never leaves the lock stuck.
     """
     if fcntl is None:
-        print("WARNING: file locking unavailable on this platform; "
-              "single-instance protection is DISABLED")
+        log("WARN", "file locking unavailable on this platform; "
+                    "single-instance protection is DISABLED")
         return None
     handle = open(INSTANCE_LOCK_FILE, 'w')
     try:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
-        print("Another instance of the bot is already running. Exiting to "
-              "avoid duplicate posts.")
+        log("ERR", "Another instance of the bot is already running. Exiting to "
+                   "avoid duplicate posts.")
         handle.close()
         sys.exit(0)
     handle.write(str(os.getpid()))
@@ -220,7 +237,7 @@ def get_first_news_link(url, skip_links=[]):
                 if is_classic:
                     classic_links.add(news_link)
             except Exception as e:
-                print(f"Timed out waiting for navigation after clicking card {i}: {e}")
+                log("WARN", f"card {i + 1}: no article page after click ({type(e).__name__})")
 
             driver.get(url)
             WebDriverWait(driver, 20).until(
@@ -228,10 +245,19 @@ def get_first_news_link(url, skip_links=[]):
             )
 
         # Check only the first three links
-        print(f"All found links: {news_links}")
-        print(f"Classic links: {sorted(classic_links)}")
         first_three_links = news_links[:3]
-        print(f"Checking these first 3: {first_three_links}")
+        log("SCAN", f"{len(first_three_links)} cards on front page:")
+        for n, link in enumerate(first_three_links, 1):
+            if link in posted_links:
+                state = "already posted"
+            elif link in skip_links:
+                state = "skipped this run"
+            else:
+                state = "NEW"
+            kind = "classic" if link in classic_links else "main"
+            line = f"{n}. [{kind}] {get_title(link)}  ({state})"
+            print(f"              {line}", flush=True)
+            status.event("SCAN", line)
         # Filter out links already posted or skipped
         filtered_links = [
             link for link in first_three_links
@@ -245,14 +271,13 @@ def get_first_news_link(url, skip_links=[]):
         if filtered_links:
             first_news_link = filtered_links[0]
             is_classic = first_news_link in classic_links
-            print(f"New post found: {first_news_link} (classic: {is_classic})")
             return first_news_link, is_classic
         else:
-            print("No new news links found in the first three links.")
+            log("RUN", "nothing new")
             return None
 
     except Exception as e:
-        print(f"An error occurred: {e}")
+        log("ERR", f"scrape failed: {type(e).__name__}: {e}")
 
     finally:
         driver.quit()
@@ -312,7 +337,7 @@ def get_title(url):
         return title
 
     except Exception as e:
-        print(f"An error occurred in get_title: {e}")
+        log("ERR", f"get_title failed: {e}")
         return None
 
 def check_if_url_in_recent_posts(url, subreddit_name, limit=10):
@@ -335,13 +360,12 @@ def check_if_url_in_recent_posts(url, subreddit_name, limit=10):
         normalized_url = normalize_url(url)
         for submission in subreddit.new(limit=limit):
             if normalize_url(submission.url) == normalized_url:
-                print(f"URL already posted recently: {url}")
                 return True
 
         return False
 
     except Exception as e:
-        print(f"Error checking recent posts: {e}")
+        log("ERR", f"recent-posts check failed, skipping to be safe: {e}")
         # Fail CLOSED. This previously returned False ("not a duplicate") on
         # any error, so a rate-limit or network blip disabled the check and
         # the bot posted regardless. Skipping a cycle costs one article for
@@ -370,17 +394,16 @@ def check_if_already_posted_by_me(url, limit=200):
         normalized_url = normalize_url(url)
         for submission in get_reddit().user.me().submissions.new(limit=limit):
             if normalize_url(submission.url) == normalized_url:
-                print(f"URL already posted by this account: {url}")
                 return True
 
         return False
 
     except Exception as e:
-        print(f"Error checking own submission history: {e}")
+        log("ERR", f"own-history check failed, skipping to be safe: {e}")
         # Fail CLOSED - see the note in check_if_url_in_recent_posts.
         return True
 
-def post_to_reddit(url, name, subreddit_name):
+def post_to_reddit(url, name, subreddit_name, flair_text):
     # Duplicate checks deliberately do NOT live here. They run in run_task,
     # inside the same lock that claims the link in news.txt, so nothing can
     # happen between "confirmed not a duplicate" and "submitted".
@@ -391,14 +414,12 @@ def post_to_reddit(url, name, subreddit_name):
         title = name
         subreddit = reddit.subreddit(subreddit_name)
         
-        # Set the "Information" flair
-        flair_text = "Information"
-        flair_choices = subreddit.flair.link_templates
+        def norm(text):
+            return re.sub(r"[\[\]\s]", "", text or "").casefold()
+
         flair_template_id = None
-        
-        # Find the "Information" flair
-        for flair in flair_choices:
-            if flair['text'] == flair_text:
+        for flair in subreddit.flair.link_templates:
+            if norm(flair['text']) == norm(flair_text):
                 flair_template_id = flair['id']
                 break
         
@@ -407,52 +428,54 @@ def post_to_reddit(url, name, subreddit_name):
         # the article. Submit without flair instead; a subreddit that requires
         # flair will reject the submit and we report failure as before.
         if not flair_template_id:
-            print(f"Flair '{flair_text}' not found in r/{subreddit_name}; posting without flair.")
+            log("WARN", f"flair '{flair_text}' not found in r/{subreddit_name}; posting without flair")
 
         submission = subreddit.submit(
             title=title,
             url=url,
             flair_id=flair_template_id  # Set flair at the time of submission
         )
-        print(f"Posted to r/{subreddit_name}: {submission.title} - {submission.url}")
+        flair_note = f"[{flair_text}]" if flair_template_id else "no flair"
+        log("OK", f"posted to r/{subreddit_name} {flair_note}: https://redd.it/{submission.id}")
+        status.update(last_post_at=time.time(), last_post=f"r/{subreddit_name}: {title}")
         return True
-    
+
     except Exception as e:
-        print(f"An error occurred while posting to Reddit: {e}")
+        log("ERR", f"post to r/{subreddit_name} failed: {e}")
         return False
 
 
 def run_task():
-    print("Checking for news...")
+    log("RUN", "---- checking Nexon news ----")
     skip_links = []  # Keep track of links we've already skipped
+    posted_any = False
     while True:
         result = get_first_news_link("https://www.nexon.com/maplestory/news/all?page=1", skip_links=skip_links)
 
         if not result:
-            print("No new link found or end of task.")
             break
 
         link, is_classic = result
 
         if is_classic:
             if not reddit_classic_subreddit:
-                print(f"Skipping classic post (REDDIT_CLASSIC_SUBREDDIT not set): {link}")
+                log("SKIP", f"[classic] REDDIT_CLASSIC_SUBREDDIT not set: {link}")
                 skip_links.append(link)
                 continue
             target_subreddit = reddit_classic_subreddit
+            flair_text = CLASSIC_FLAIR
         else:
             target_subreddit = reddit_subreddit
+            flair_text = MAIN_FLAIR
 
         # Safety net: never post anything that isn't a real article URL
         # (e.g. the news listing page itself, if scraping ever misfires).
         if not re.match(r"https://www\.nexon\.com/maplestory/news/[\w-]+/\d+/[\w-]+", link):
-            print(f"Skipping malformed/non-article link: {link}")
+            log("SKIP", f"not an article URL: {link}")
             skip_links.append(link)
             continue
 
-        print(f"Getting title for: {link}")
         name = get_title(link)
-        print(f"Title: {name}")
         forbidden_keywords = ["[UPDATED", "[COMPLETED", "MAINTENANCE", "ART CORNER","SCHEDULED","PATCH NOTES CHAT CLOSURE","[UPDATE]"]
        
         # Check if title starts with "update" or "updated" (case-insensitive)
@@ -478,18 +501,18 @@ def run_task():
             # trusted; we re-read under the lock instead.
             with file_lock(POST_LOCK_FILE, "post"):
                 if normalize_url(link) in load_posted_links():
-                    print(f"URL {link} was posted while we were scraping. Skipping...")
+                    log("SKIP", f"{name} - posted by another process while scraping")
                     skip_links.append(link)
                     continue
 
                 if check_if_already_posted_by_me(link):
-                    print(f"URL {link} already in this account's history. Skipping...")
+                    log("SKIP", f"{name} - already in this account's post history")
                     record_posted_link(link)
                     skip_links.append(link)
                     continue
 
                 if check_if_url_in_recent_posts(link, target_subreddit):
-                    print(f"URL {link} already posted recently. Skipping...")
+                    log("SKIP", f"{name} - already in recent r/{target_subreddit} posts (or check failed)")
                     skip_links.append(link)
                     continue
 
@@ -500,24 +523,29 @@ def run_task():
                 # article (recoverable by deleting the line from news.txt),
                 # whereas a duplicate is public and permanent.
                 record_posted_link(link)
-                post_success = post_to_reddit(link, name, target_subreddit)
+                log("POST", f"[{'classic' if is_classic else 'main'}] -> r/{target_subreddit}: {name}")
+                post_success = post_to_reddit(link, name, target_subreddit, flair_text)
 
             if post_success:
+                posted_any = True
                 break  # Exit the loop after successfully posting
             else:
-                print(f"WARNING: {link} was claimed in {NEWS_FILE} but posting "
-                      f"failed. It will not be retried. Remove that line "
-                      f"manually if you want the bot to try again.")
+                log("WARN", f"{link} was claimed in news.txt but posting failed; "
+                            f"it will not be retried. Delete that line to retry.")
                 skip_links.append(link)  # Add this link to skip list if posting failed
         else:
+            kind = "classic" if is_classic else "main"
             if starts_with_forbidden:
-                print(f"Skipped due to title starting with 'update' or 'updated': {name}")
+                reason = "title starts with update/complete"
             elif contains_forbidden_keyword:
-                print(f"Skipped due to forbidden keyword: {name}")
+                reason = "forbidden keyword"
             else:
-                print(f"Skipped due to title is None: {name}")
+                reason = "no title"
+            log("SKIP", f"[{kind}] {name} - {reason}")
             skip_links.append(link)  # Add this link to the skip list
-    print("End task")
+    log("RUN", "---- done: " + ("posted 1 article" if posted_any else "no post this cycle") + " ----")
+    status.update(last_run_at=time.time(), last_run_result="posted" if posted_any else "nothing posted",
+                  next_run=schedule.next_run().timestamp())
 
 # Schedule the task at xx:00 and xx:35
 schedule.every().hour.at(":00").do(run_task)  # Run at every xx:00
@@ -528,7 +556,7 @@ if __name__ == "__main__":
     # regardless of how this one was launched. Held for the process lifetime.
     _instance_lock = acquire_single_instance_lock()
 
-    print("launching and doing initial check")
+    log("RUN", f"bot started (main: r/{reddit_subreddit}, classic: " + (f"r/{reddit_classic_subreddit}" if reddit_classic_subreddit else "DISABLED") + ")")
     run_task()
     while True:
         schedule.run_pending()  # Run pending scheduled tasks
