@@ -1,4 +1,5 @@
 import os
+import json
 import re
 import shutil
 import sys
@@ -57,6 +58,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 NEWS_FILE = os.path.join(BASE_DIR, 'news.txt')
 INSTANCE_LOCK_FILE = os.path.join(BASE_DIR, '.bot.instance.lock')
 POST_LOCK_FILE = os.path.join(BASE_DIR, '.bot.post.lock')
+POSTS_FILE = os.path.join(BASE_DIR, 'posts.json')   # engagement tracking
+TRACK_DAYS = 7      # keep re-checking score/comments for this long after posting
+KEEP_DAYS = 60      # forget posts older than this
+DASHBOARD_POSTS = 15
 
 # Flair applied per target subreddit. Matched loosely (case/brackets ignored),
 # so a flair shown as "[Notice]" on Reddit still matches "Notice".
@@ -438,11 +443,111 @@ def post_to_reddit(url, name, subreddit_name, flair_text):
         flair_note = f"[{flair_text}]" if flair_template_id else "no flair"
         log("OK", f"posted to r/{subreddit_name} {flair_note}: https://redd.it/{submission.id}")
         status.update(last_post_at=time.time(), last_post=f"r/{subreddit_name}: {title}")
+        track_new_post(submission, subreddit_name)
         return True
 
     except Exception as e:
         log("ERR", f"post to r/{subreddit_name} failed: {e}")
         return False
+
+
+def load_tracked_posts():
+    if not os.path.exists(POSTS_FILE):
+        return []
+    try:
+        with open(POSTS_FILE, 'r') as file:
+            return json.load(file)
+    except (OSError, ValueError) as e:
+        log("WARN", f"could not read {POSTS_FILE} ({e}); starting engagement history fresh")
+        return []
+
+
+def save_tracked_posts(posts):
+    tmp = POSTS_FILE + '.tmp'
+    with open(tmp, 'w') as file:
+        json.dump(posts, file)
+    os.replace(tmp, POSTS_FILE)
+
+
+def _tracked_entry(submission, subreddit_name):
+    return {
+        'id': submission.id,
+        'sub': subreddit_name,
+        'title': submission.title,
+        'created': float(getattr(submission, 'created_utc', None) or time.time()),
+        'score': int(getattr(submission, 'score', 1)),
+        'ratio': getattr(submission, 'upvote_ratio', None),
+        'comments': int(getattr(submission, 'num_comments', 0)),
+        'removed': bool(getattr(submission, 'removed_by_category', None)),
+    }
+
+
+def track_new_post(submission, subreddit_name):
+    """Remember a post we just made so refresh_engagement can follow it."""
+    try:
+        posts = load_tracked_posts()
+        posts.append(_tracked_entry(submission, subreddit_name))
+        save_tracked_posts(posts)
+    except Exception as e:
+        log("WARN", f"could not track new post for engagement: {e}")
+
+
+def backfill_tracked_posts():
+    """First run only: seed the history from the account's recent submissions."""
+    posts = []
+    watched = {reddit_subreddit.lower()}
+    if reddit_classic_subreddit:
+        watched.add(reddit_classic_subreddit.lower())
+    for submission in get_reddit().user.me().submissions.new(limit=50):
+        sub_name = submission.subreddit.display_name
+        if sub_name.lower() in watched:
+            posts.append(_tracked_entry(submission, sub_name))
+    log("STAT", f"engagement history seeded with {len(posts)} existing posts")
+    return posts
+
+
+def refresh_engagement():
+    """Re-read score/comments for recent posts and push the table to the dashboard."""
+    try:
+        posts = load_tracked_posts()
+        if not posts and not os.path.exists(POSTS_FILE):
+            posts = backfill_tracked_posts()
+
+        now = time.time()
+        posts = [p for p in posts if now - p['created'] < KEEP_DAYS * 86400]
+        active = {p['id']: p for p in posts if now - p['created'] < TRACK_DAYS * 86400}
+        if active:
+            for submission in get_reddit().info(fullnames=[f"t3_{i}" for i in active]):
+                p = active.get(submission.id)
+                if p:
+                    p.update(_tracked_entry(submission, p['sub']))
+                    p['created'] = p.get('created') or now
+        save_tracked_posts(posts)
+
+        recent = sorted(posts, key=lambda p: p['created'], reverse=True)
+        week = [p for p in recent if now - p['created'] < TRACK_DAYS * 86400 and not p['removed']]
+        best = max(week, key=lambda p: p['score'], default=None)
+        status.update(
+            posts_7d=len(week),
+            score_7d=sum(p['score'] for p in week),
+            comments_7d=sum(p['comments'] for p in week),
+            best_post=f"{best['score']} pts - {best['title']}" if best else "-",
+            removed_7d=sum(1 for p in recent if p['removed'] and now - p['created'] < TRACK_DAYS * 86400),
+            recent_posts=[{
+                'title': p['title'],
+                'url': f"https://redd.it/{p['id']}",
+                'sub': f"r/{p['sub']}",
+                'posted_at': p['created'],
+                'score': p['score'],
+                'upvote_pct': round(p['ratio'] * 100) if p.get('ratio') is not None else None,
+                'comments': p['comments'],
+                'state': 'REMOVED' if p['removed'] else 'live',
+            } for p in recent[:DASHBOARD_POSTS]],
+        )
+        log("STAT", f"engagement: {len(week)} posts in 7d, "
+                    f"{sum(p['score'] for p in week)} pts, {sum(p['comments'] for p in week)} comments")
+    except Exception as e:
+        log("ERR", f"engagement refresh failed: {type(e).__name__}: {e}")
 
 
 def run_task():
@@ -550,6 +655,7 @@ def run_task():
 # Schedule the task at xx:00 and xx:35
 schedule.every().hour.at(":00").do(run_task)  # Run at every xx:00
 schedule.every().hour.at(":35").do(run_task)  # Run at every xx:35
+schedule.every(30).minutes.do(refresh_engagement)
 
 if __name__ == "__main__":
     # Must come first: refuses to start if another bot is already running,
@@ -557,6 +663,7 @@ if __name__ == "__main__":
     _instance_lock = acquire_single_instance_lock()
 
     log("RUN", f"bot started (main: r/{reddit_subreddit}, classic: " + (f"r/{reddit_classic_subreddit}" if reddit_classic_subreddit else "DISABLED") + ")")
+    refresh_engagement()
     run_task()
     while True:
         schedule.run_pending()  # Run pending scheduled tasks
