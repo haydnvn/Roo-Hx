@@ -550,6 +550,81 @@ def refresh_engagement():
         log("ERR", f"engagement refresh failed: {type(e).__name__}: {e}")
 
 
+DUP_WATCH_LIMIT = 100          # recent subreddit posts to audit
+dupes_blocked = {'main': 0, 'classic': 0}   # reposts the pre-post checks stopped (this process)
+_last_dup_count = {}
+
+
+def _dup_groups(entries):
+    """Group entries by normalized URL, then by title; return groups with >1 member.
+
+    Title matching catches the same article posted under two different URLs
+    (e.g. a re-published link), which URL matching alone cannot see.
+    """
+    groups = []
+    for key_of in (lambda e: normalize_url(e['url']), lambda e: re.sub(r"\W+", "", e['title']).casefold()):
+        seen = {}
+        for e in entries:
+            seen.setdefault(key_of(e), []).append(e)
+        groups.extend(g for g in seen.values() if len(g) > 1)
+    # A pair that matches on both URL and title would be counted twice.
+    unique = {frozenset(e['id'] for e in g): g for g in groups}
+    return list(unique.values())
+
+
+def refresh_dup_watch():
+    """Audit recent posts in each target subreddit for reposts by this account.
+
+    The pre-post checks stop most duplicates; this is the independent check
+    that proves it, and the only one that sees a duplicate made by another
+    process or posted by hand. Results go to the dashboard.
+    """
+    try:
+        reddit = get_reddit()
+        me = reddit.user.me().name.lower()
+        for label, name in (('classic', reddit_classic_subreddit), ('main', reddit_subreddit)):
+            if not name:
+                status.update(**{f'{label}_sub': 'disabled'})
+                continue
+            mine = []
+            for s in reddit.subreddit(name).new(limit=DUP_WATCH_LIMIT):
+                if s.author and s.author.name.lower() == me:
+                    mine.append({'id': s.id, 'title': s.title, 'url': s.url,
+                                 'created': float(s.created_utc), 'score': int(s.score),
+                                 'removed': bool(getattr(s, 'removed_by_category', None))})
+            groups = _dup_groups(mine)
+            dup_ids = {e['id'] for g in groups for e in g[1:]}   # the later copies
+            if groups:
+                alert = "; ".join(f"x{len(g)} {g[0]['title'][:60]}" for g in groups[:3])
+            else:
+                alert = "none"
+            status.update(**{
+                f'{label}_sub': f"r/{name}",
+                f'{label}_posts_audited': len(mine),
+                f'{label}_reposts_found': len(groups),
+                f'{label}_repost_alert': alert,
+                f'{label}_reposts_blocked': dupes_blocked[label],
+                f'{label}_audit_at': time.time(),
+            })
+            if label == 'classic':
+                recent = sorted(mine, key=lambda e: e['created'], reverse=True)[:10]
+                status.update(classic_recent=[{
+                    'title': e['title'],
+                    'url': f"https://redd.it/{e['id']}",
+                    'posted_at': e['created'],
+                    'score': e['score'],
+                    'state': 'REPOST' if e['id'] in dup_ids else 'REMOVED' if e['removed'] else 'live',
+                } for e in recent])
+            if len(groups) != _last_dup_count.get(label):
+                _last_dup_count[label] = len(groups)
+                if groups:
+                    log("ERR", f"REPOST in r/{name}: {alert}")
+                else:
+                    log("OK", f"repost audit r/{name}: {len(mine)} posts, no duplicates")
+    except Exception as e:
+        log("ERR", f"repost audit failed: {type(e).__name__}: {e}")
+
+
 def run_task():
     log("RUN", "---- checking Nexon news ----")
     skip_links = []  # Keep track of links we've already skipped
@@ -607,17 +682,20 @@ def run_task():
             with file_lock(POST_LOCK_FILE, "post"):
                 if normalize_url(link) in load_posted_links():
                     log("SKIP", f"{name} - posted by another process while scraping")
+                    dupes_blocked['classic' if is_classic else 'main'] += 1
                     skip_links.append(link)
                     continue
 
                 if check_if_already_posted_by_me(link):
                     log("SKIP", f"{name} - already in this account's post history")
+                    dupes_blocked['classic' if is_classic else 'main'] += 1
                     record_posted_link(link)
                     skip_links.append(link)
                     continue
 
                 if check_if_url_in_recent_posts(link, target_subreddit):
                     log("SKIP", f"{name} - already in recent r/{target_subreddit} posts (or check failed)")
+                    dupes_blocked['classic' if is_classic else 'main'] += 1
                     skip_links.append(link)
                     continue
 
@@ -656,6 +734,7 @@ def run_task():
 schedule.every().hour.at(":00").do(run_task)  # Run at every xx:00
 schedule.every().hour.at(":35").do(run_task)  # Run at every xx:35
 schedule.every(30).minutes.do(refresh_engagement)
+schedule.every(30).minutes.do(refresh_dup_watch)
 
 if __name__ == "__main__":
     # Must come first: refuses to start if another bot is already running,
@@ -664,6 +743,7 @@ if __name__ == "__main__":
 
     log("RUN", f"bot started (main: r/{reddit_subreddit}, classic: " + (f"r/{reddit_classic_subreddit}" if reddit_classic_subreddit else "DISABLED") + ")")
     refresh_engagement()
+    refresh_dup_watch()
     run_task()
     while True:
         schedule.run_pending()  # Run pending scheduled tasks
